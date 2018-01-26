@@ -2,73 +2,65 @@ package main
 
 import (
 	"flag"
-	"fmt"
-	"os"
-	"os/signal"
-	"sync"
-	"syscall"
+	"time"
 
-	"github.com/Sirupsen/logrus"
-	//"github.com/vgkowski/cassandra-operator/pkg/operator"
+	"github.com/golang/glog"
+	kubeinformers "k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
+	"github.com/vgkowski/cassandra-operator/pkg/signals"
+	"os"
+
+	clientset "github.com/vgkowski/cassandra-operator/pkg/client/clientset/versioned"
+	informers "github.com/vgkowski/cassandra-operator/pkg/client/informers/externalversions"
+	cassandraController "github.com/vgkowski/cassandra-operator/pkg/controller"
 )
 
 var (
-	appVersion = "0.1"
-
-	printVersion bool
-	baseImage    string
-	kubeCfgFile  string
-	namespace	 string
-	masterURL	 string
+	masterURL  string
+	kubeconfig string
+	baseImage string
+	namespace string
 )
 
-func init() {
-	flag.StringVar(&baseImage, "baseImage", "sebmoule/cassandra:0.1-dev", "Base image to use when spinning up the Cassandra components.")
-	flag.StringVar(&kubeCfgFile, "kubecfg-file", "", "Location of kubecfg file for access to kubernetes master service; --kube_master_url overrides the URL part of this; if neither this nor --kube_master_url are provided, defaults to service account tokens")
-	flag.StringVar(&namespace, "namespace", os.Getenv("NAMESPACE"), "namespace to deploy the operator")
-	flag.StringVar(&masterURL, "masterURL", "http://127.0.0.1:8001", "Full url to k8s api server")
+func main() {
 	flag.Parse()
+
+	// set up signals so we handle the first shutdown signal gracefully
+	stopCh := signals.SetupSignalHandler()
+
+	cfg, err := clientcmd.BuildConfigFromFlags(masterURL, kubeconfig)
+	if err != nil {
+		glog.Fatalf("Error building kubeconfig: %s", err.Error())
+	}
+
+	kubeClient, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		glog.Fatalf("Error building kubernetes clientset: %s", err.Error())
+	}
+
+	cassandraClusterClient, err := clientset.NewForConfig(cfg)
+	if err != nil {
+		glog.Fatalf("Error building example clientset: %s", err.Error())
+	}
+
+	// use informers that filter on the namespace where the operator is deployed
+	kubeInformerFactory := kubeinformers.NewFilteredSharedInformerFactory(kubeClient, time.Second*30,namespace,nil)
+	cassandraClusterInformerFactory := informers.NewFilteredSharedInformerFactory(cassandraClusterClient, time.Second*30,namespace,nil)
+
+	controller := cassandraController.NewController(cfg,kubeClient,namespace, cassandraClusterClient, kubeInformerFactory, cassandraClusterInformerFactory)
+
+	go kubeInformerFactory.Start(stopCh)
+	go cassandraClusterInformerFactory.Start(stopCh)
+
+	if err = controller.Run(2, stopCh); err != nil {
+		glog.Fatalf("Error running controller: %s", err.Error())
+	}
 }
 
-// Main entrypoint
-func main()  {
-	// Some possible improvements with parallelism and asynchronous to manage multiple clusters
-	// in parallel
-	if printVersion {
-		fmt.Println("cassandra-operator", appVersion)
-		os.Exit(0)
-	}
-
-	logrus.Info("Cassandra operator starting up!")
-
-	// Print params configured
-	logrus.Info("Using Variables:")
-	logrus.Infof("   baseImage: %s", baseImage)
-	logrus.Infof("   namespace: %s", namespace)
-
-	sigs := make(chan os.Signal, 1) // Create channel to receive OS signals
-	stop := make(chan struct{})     // Create channel to receive stop signal
-
-	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGINT) // Register the sigs channel to receieve SIGTERM
-
-	wg := &sync.WaitGroup{} // Goroutines can add themselves to this to be waited on so that they finish
-
-
-	// Init
-	controller, err := operator.NewCassandraClusterController(kubeCfgFile,namespace, baseImage)
-
-	if err != nil {
-		logrus.Error("Could not init Controller! ", err)
-		panic(err.Error())
-	}
-
-	// Kick it off
-	controller.Run(stop,wg)
-
-
-	<-sigs // Wait for signals (this hangs until a signal arrives)
-	logrus.Info("Shutting down...")
-
-	close(stop) // Tell goroutines to stop themselves
-	wg.Wait()   // Wait for all to be stopped
+func init() {
+	flag.StringVar(&kubeconfig, "kubeconfig", "", "Path to a kubeconfig. Only required if out-of-cluster.")
+	flag.StringVar(&masterURL, "master", "", "The address of the Kubernetes API server. Overrides any value in kubeconfig. Only required if out-of-cluster.")
+	flag.StringVar(&baseImage, "baseImage", "cassandra:3.0.15", "Base image to use when spinning up the Cassandra components.")
+	flag.StringVar(&namespace, "namespace", os.Getenv("NAMESPACE"), "namespace to deploy the controller")
 }

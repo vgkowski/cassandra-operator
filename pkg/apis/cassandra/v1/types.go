@@ -13,10 +13,12 @@ type CassandraCluster struct {
 }
 
 type CassandraClusterSpec struct {
+	BaseImage string `json:"baseImage"`
 	Cpu string `json:"cpu"`
 	Memory string `json:"memory"`
 	Data Storage `json:"data"`
-	NbNodes int32 `json:"nbNodes"`
+	NbNodes *int32 `json:"nbNodes"`
+	AntiAffinity bool `json:"antiAffinity"`
 	RackLabel string `json:"rackLabel"`
 	DCLabel string `json:"dcLabel"`
 	Spec CassandraSpec `json:"spec"`

@@ -4,54 +4,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/apimachinery/pkg/api/errors"
 	"fmt"
 	"bytes"
 	"k8s.io/api/core/v1"
 )
-
-func (c *Controller) DeleteStatefulSet(stsName string) error{
-	err := c.kubeClientset.AppsV1().StatefulSets(c.namespace).Delete(stsName, &metav1.DeleteOptions{
-		PropagationPolicy: func() *metav1.DeletionPropagation {
-			foreground := metav1.DeletePropagationForeground
-			return &foreground
-		}(),
-	})
-	if errors.IsNotFound(err) {
-		err = nil
-	}
-	return err
-}
-
-func (c *Controller) DeletePVC(name string) error{
-	pvcClient := c.kubeClientset.CoreV1().PersistentVolumeClaims(c.namespace)
-	// use the owner of the PVC to get PVC associated with cassandraCluster
-	pvcs,err := pvcClient.List(metav1.ListOptions{LabelSelector: "cassandraCluster="+name})
-	if err != nil {
-		return err
-	}
-
-	nbPVC := len(pvcs.Items)
-	for i := 0 ; i < nbPVC ; i++ {
-		err := pvcClient.Delete(pvcs.Items[i].Name, &metav1.DeleteOptions{})
-		if errors.IsNotFound(err) {
-			err = nil
-			continue
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *Controller) DeleteService(svcName string) error{
-	err := c.kubeClientset.CoreV1().Services(c.namespace).Delete(svcName, &metav1.DeleteOptions{})
-	if errors.IsNotFound(err) {
-		err = nil
-	}
-	return err
-}
 
 func (c *Controller) ExecCmd(podName string,cmd [] string) (string,string,error) {
 	// get the pod from the name

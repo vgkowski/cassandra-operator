@@ -1,13 +1,5 @@
 package controller
 
-import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/client-go/kubernetes"
-
-)
-
 func (c *Controller) deleteCassandraCluster(name string) error {
 	// deleted the statefulset
 	err := c.DeleteStatefulSet(name)

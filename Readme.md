@@ -21,5 +21,6 @@ Be careful of cloning the branch matching the Kubernetes version
 For multiple resources of the same type (services for instance) a postfix is added to the name ("<name>-internode" for internode service and "<name>-access" for access service)
 A better option would be to use the `metadata.ownerReference` but it requires to search and get objects by this reference instead of by name.
 For indexed objects like Pods or PVCs the search and get is done through the label `CassandraCluster` which contains the name of the cluster
+* Implement proper Cassandra admin logic (current code isn't working)
 
  

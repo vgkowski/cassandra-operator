@@ -21,7 +21,7 @@ type CassandraClusterSpec struct {
 	AntiAffinity bool `json:"antiAffinity"`
 	RackLabel string `json:"rackLabel"`
 	DCLabel string `json:"dcLabel"`
-	Spec CassandraSpec `json:"spec"`
+	CassandraSpec CassandraSpec `json:"spec"`
 }
 
 type Storage struct {

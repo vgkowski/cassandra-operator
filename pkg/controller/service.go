@@ -39,12 +39,11 @@ func (c *Controller) CreateOrUpdateService(svc *v1.Service) error {
 	return nil
 }
 
-func (c *Controller) BuildService(cc *cassandrav1.CassandraCluster) *v1.Service{
+func (c *Controller) BuildHeadlessService(cc *cassandrav1.CassandraCluster) *v1.Service{
 	service := &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: cc.Name,
+			Name: cc.Name+"-node",
 			Annotations: map[string]string{
-				// todo: add operator name in labels
 				"operatorVersion": cassandrav1.CassandraCluster.APIVersion,
 
 			},

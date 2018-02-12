@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	cassandrav1 "github.com/vgkowski/cassandra-operator/pkg/apis/cassandra/v1"
 
+	"os/exec"
 )
 
 func (c *Controller) DeleteStatefulSet(stsName string) error{
@@ -83,7 +84,7 @@ func (c *Controller) BuildStatefulSet(cc *cassandrav1.CassandraCluster) *v1.Stat
 						LabelSelector: &metav1.LabelSelector{
 							MatchExpressions: []metav1.LabelSelectorRequirement{
 								{
-									Key:      "mongodbCluster",
+									Key:      "cassandraCluster",
 									Operator: metav1.LabelSelectorOpIn,
 									Values:   []string{cc.ObjectMeta.Name},
 								},
@@ -106,22 +107,22 @@ func (c *Controller) BuildStatefulSet(cc *cassandrav1.CassandraCluster) *v1.Stat
 				"role": "cassandraCluster",
 			},
 			Annotations: map[string]string{
-				// todo: add operator name in labels
 				"operatorVersion": cassandrav1.SchemeGroupVersion.Version,
 
 			},
 		},
 		Spec: v1.StatefulSetSpec{
-			ServiceName: cc.Name,
+			ServiceName: cc.Name+"-node",
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string {
 					"cassandraCluster": cc.Name,
 				},
 			},
 			UpdateStrategy: v1.StatefulSetUpdateStrategy{
-				v1.RollingUpdateStatefulSetStrategyType,
-				&v1.RollingUpdateStatefulSetStrategy{
-					func(i int) *int32 { j:=int32(i);return &j}(0),
+				Type: v1.RollingUpdateStatefulSetStrategyType,
+				RollingUpdate: &v1.RollingUpdateStatefulSetStrategy{
+					// partition can be used to introduce
+					Partition: func(i int) *int32 { j:=int32(i);return &j}(0),
 				},
 			},
 			Replicas: cc.Spec.NbNodes,
@@ -132,12 +133,16 @@ func (c *Controller) BuildStatefulSet(cc *cassandrav1.CassandraCluster) *v1.Stat
 						"cassandraCluster": cc.Name,
 						"role": "cassandraCluster",
 					},
+					Annotations: map[string]string{
+						"operatorVersion": cassandrav1.SchemeGroupVersion.Version,
+
+					},
 				},
 				Spec: corev1.PodSpec{
 
 					Affinity: antiAffinity,
 					TerminationGracePeriodSeconds: func(i int64) *int64 { return &i}(10),
-					Volumes: []corev1.Volume{
+					/*Volumes: []corev1.Volume{
 						{
 							Name:	"secret",
 							VolumeSource: corev1.VolumeSource{
@@ -147,26 +152,12 @@ func (c *Controller) BuildStatefulSet(cc *cassandrav1.CassandraCluster) *v1.Stat
 								},
 							},
 						},
-					},
+					},*/
 					Containers: []corev1.Container{
 						{
 							Name:            "cassandra",
 							Image:           cc.Spec.BaseImage,
 							ImagePullPolicy: "Always",
-							Command: []string{
-								"numactl",
-								"--interleave=all",
-								"mongod",
-								"--replSet",
-								cc.Name,
-								"--auth",
-								"--clusterAuthMode",
-								"keyFile",
-								"--keyFile",
-								"/etc/secrets-volume/node-token",
-								"--setParameter",
-								"authenticationMechanisms=SCRAM-SHA-1",
-							},
 							Env: []corev1.EnvVar{
 								{
 									Name: "NAMESPACE",
@@ -176,23 +167,102 @@ func (c *Controller) BuildStatefulSet(cc *cassandrav1.CassandraCluster) *v1.Stat
 										},
 									},
 								},
+								{
+									Name: "MAX_HEAP_SIZE",
+									Value: cc.Spec.CassandraSpec.MaxHeapSize,
+								},
+								{
+									Name: "HEAP_NEW_SIZE",
+									Value: cc.Spec.CassandraSpec.HeapNewSize,
+								},
+								{
+									Name: "CASSANDRA_SEEDS",
+									Value: cc.Name+"-0."+cc.Name+"-node."+c.namespace+".svc.cluster.local",
+								},
+								{
+									Name: "CASSANDRA_CLUSTER_NAME",
+									Value: cc.Name,
+								},
+								{
+									Name: "CASSANDRA_DC",
+									Value: cc.Spec.CassandraSpec.MaxHeapSize,
+								},
+								{
+									Name: "CASSANDRA_RACK",
+									Value: cc.Spec.CassandraSpec.MaxHeapSize,
+								},
+								{
+									Name: "CASSANDRA_AUTO_BOOTSTRAP",
+									Value: cc.Spec.CassandraSpec.MaxHeapSize,
+								},
+								{
+									Name: "POD_IP",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "status.podIP",
+										},
+									},
+								},
 							},
 							Ports: []corev1.ContainerPort{
 								{
-									Name:          "mongo",
-									ContainerPort: 27017,
+									Name:          "cql",
+									ContainerPort: 9042,
 								},
+								{
+									Name:          "jmx",
+									ContainerPort: 7199,
+								},
+								{
+									Name:          "tls-intra-node",
+									ContainerPort: 7001,
+								},
+								{
+									Name:          "intra-node",
+									ContainerPort: 7000,
+								},
+							},
+							SecurityContext: &corev1.SecurityContext{
+								Capabilities: &corev1.Capabilities{
+									Add: []corev1.Capability{
+										"IPC_LOCK",
+									},
+								},
+							},
+							Lifecycle: &corev1.Lifecycle{
+								PreStop: &corev1.Handler{
+									Exec: &corev1.ExecAction{
+										Command: []string {
+											"/bin/sh",
+											"-c",
+											"PID=$(pidof java) && kill $PID && while ps -p $PID > /dev/null; do sleep 1; done",
+										},
+									},
+								},
+							},
+							ReadinessProbe: &corev1.Probe{
+								Handler: corev1.Handler{
+									Exec: &corev1.ExecAction{
+										Command: []string {
+											"/bin/bash",
+											"-c",
+											"/ready-probe.sh",
+										},
+									},
+								},
+								InitialDelaySeconds: int32(15),
+								TimeoutSeconds: int32(5),
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "data",
-									MountPath: "/data/db",
+									MountPath: "/cassandra_data",
 								},
-								{
+								/*{
 									Name:		"secret",
 									MountPath:	"/etc/secrets-volume",
 									ReadOnly: 	true,
-								},
+								},*/
 							},
 							Resources: corev1.ResourceRequirements{
 								Limits: corev1.ResourceList{
@@ -204,26 +274,7 @@ func (c *Controller) BuildStatefulSet(cc *cassandrav1.CassandraCluster) *v1.Stat
 									"memory": requestMemory,
 								},
 							},
-							// TODO add readiness probe
-							//ReadinessProbe:,
 							// TODO add liveness probe
-							//LivenessProbe:,
-							/*livenessProbe:
-							tcpSocket:
-							port: 27017
-							initialDelaySeconds: 30
-							timeoutSeconds: 1
-						periodSeconds: 10
-						successThreshold: 1
-							failureThreshold: 3
-							readinessProbe:
-							exec:
-							command:
-							- /bin/sh
-							- '-i'
-                			- '-c'
-                			- >-
-						mongo $MONGO_URI --eval="quit()"*/
 						},
 					},
 				},

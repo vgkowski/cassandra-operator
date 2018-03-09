@@ -6,6 +6,7 @@ import (
 	"k8s.io/api/core/v1"
 	cassandrav1 "github.com/vgkowski/cassandra-operator/pkg/apis/cassandra/v1"
 
+	"encoding/xml"
 )
 
 func (c *Controller) DeleteService(svcName string) error{
@@ -16,9 +17,14 @@ func (c *Controller) DeleteService(svcName string) error{
 	return err
 }
 
-func (c *Controller) CreateOrUpdateService(svc *v1.Service) error {
+func (c *Controller) CreateOrUpdateService(cc *cassandrav1.CassandraCluster) error {
+	// build the service
+	svc := c.BuildHeadlessService(cc)
+
 	client := c.kubeClientset.CoreV1().Services(c.namespace)
-	service, err := client.Get(svc.Name, metav1.GetOptions{})
+	// TODO use lister instead of direct query ?
+	service, err := c.servicesLister.Services(c.namespace).Get(cc.Name)
+	//service, err := client.Get(svc.Name, metav1.GetOptions{})
 	if err != nil && !errors.IsNotFound(err) {
 		return err
 	}

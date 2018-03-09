@@ -1,5 +1,7 @@
 package controller
 
+import "github.com/vgkowski/cassandra-operator/pkg/apis/cassandra/v1"
+
 func (c *Controller) deleteCassandraCluster(name string) error {
 	// deleted the statefulset
 	err := c.DeleteStatefulSet(name)
@@ -19,20 +21,36 @@ func (c *Controller) deleteCassandraCluster(name string) error {
 	return err
 }
 
-func (c *Controller) createCassandraCluster(name string) error {
-	// create the statefulset object
-	err := c.DeleteStatefulSet(name)
+func (c *Controller) createOrUpdateCassandraCluster(cc *v1.CassandraCluster) error {
+	// reconciliates the statefulset
+	repair,err := c.CreateOrUpdateStatefulSet(cc)
 	if err != nil {
 		return err
 	}
-	err = c.DeletePVC(name)
+
+	// if required, launch a repair
+	if repair == true {
+
+	}
+	// reconciliates the service
+	err = c.CreateOrUpdateService(cc)
 	if err != nil {
 		return err
 	}
-	err = c.DeleteService(name)
+
+	return nil
+}
+
+func (c *Controller) fullRepair(cc *v1.CassandraCluster) error {
+	// get the statefulset
+	sts, err := c.statefulsetsLister.StatefulSets(c.namespace).Get(cc.Name)
 	if err != nil {
 		return err
 	}
-	return err
+	// get the pods owned by the statefulset
+	pods := c.podLister.Pods(c.namespace).List()
+
+	// iterate over the range and execucte "nodetool repair -pr"
+	c.ExecCmd(pod,"nodetool repair -pr")
 }
 

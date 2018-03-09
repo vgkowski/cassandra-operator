@@ -12,6 +12,7 @@ import (
 	cassandrav1 "github.com/vgkowski/cassandra-operator/pkg/apis/cassandra/v1"
 
 	"os/exec"
+	"k8s.io/client-go/tools/cache"
 )
 
 func (c *Controller) DeleteStatefulSet(stsName string) error{
@@ -27,29 +28,34 @@ func (c *Controller) DeleteStatefulSet(stsName string) error{
 	return err
 }
 
-func (c *Controller) CreateOrUpdateStatefulSet(sts *v1.StatefulSet) error{
-
+func (c *Controller) CreateOrUpdateStatefulSet(cc *cassandrav1.CassandraCluster) (bool,error) {
+	// get the client
 	client := c.kubeClientset.AppsV1().StatefulSets(c.namespace)
-
-	statefulSet, err := client.Get(sts.Name, metav1.GetOptions{})
+	// get the current statefulset
+	oldSts, err := c.statefulsetsLister.StatefulSets(c.namespace).Get(cc.Name)
 	if err != nil && !errors.IsNotFound(err) {
-		return err
+		return false,err
 	}
-
+	// build the target statefulset
+	newSts := c.BuildStatefulSet(cc)
 	if errors.IsNotFound(err) {
-		_, err = client.Create(sts)
+		_, err = client.Create(newSts)
 		if err != nil {
-			return err
+			return false,err
 		}
 	} else {
-		sts.ResourceVersion = statefulSet.ResourceVersion
-		_, err := client.Update(sts)
+		newSts.ResourceVersion = oldSts.ResourceVersion
+		_, err := client.Update(newSts)
 		if err != nil && !errors.IsNotFound(err) {
-			return err
+			return false,err
 		}
 	}
-
-	return nil
+	// TODO check what requires a repair
+	// test what requires a repair (change in # of node, change in version ?)
+	if newSts.Spec.Replicas != oldSts.Spec.Replicas {
+		return true,nil
+	}
+	return false,nil
 }
 
 // query API server until the stateful set is completely deployed (use an exponential back off and a timeout)

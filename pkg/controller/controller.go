@@ -16,6 +16,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	appslisters "k8s.io/client-go/listers/apps/v1"
+	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
@@ -28,6 +29,7 @@ import (
 	cassandraScheme "github.com/vgkowski/cassandra-operator/pkg/client/clientset/versioned/scheme"
 	cassandrav1 "github.com/vgkowski/cassandra-operator/pkg/apis/cassandra/v1"
 	"k8s.io/client-go/scale/scheme/appsv1beta2"
+	"k8s.io/client-go/informers/core/v1"
 )
 
 const controllerAgentName = "cassandraCluster-controller"
@@ -60,8 +62,12 @@ type Controller struct {
 
 	statefulsetsLister appslisters.StatefulSetLister
 	statefulsetsSynced cache.InformerSynced
+	servicesLister corelisters.ServiceLister
+	servicesSynced cache.InformerSynced
 	CassandraClustersLister        listers.CassandraClusterLister
 	CassandraClustersSynced        cache.InformerSynced
+	podLister					   corelisters.PodLister
+	podSynced					   cache.InformerSynced
 
 	// workqueue is a rate limited work queue. This is used to queue work to be
 	// processed instead of performing it as soon as a change happens. This
@@ -87,6 +93,8 @@ func NewController(
 	// types.
 	statefulsetInformer := kubeInformerFactory.Apps().V1().StatefulSets()
 	CassandraClusterInformer := cassandraClusterInformerFactory.Cassandra().V1().CassandraClusters()
+	serviceInformer := kubeInformerFactory.Core().V1().Services()
+	podInformer := kubeInformerFactory.Core().V1().Pods()
 
 	// Create event broadcaster
 	// Add cassandraCluster-controller types to the default Kubernetes Scheme so Events can be
@@ -103,6 +111,10 @@ func NewController(
 		kubeClientset:     kubeClientset,
 		namespace: namespace,
 		cassandraClusterClientset:   cassandraClusterClientset,
+		podLister: podInformer.Lister(),
+		podSynced: podInformer.Informer().HasSynced(),
+		servicesLister: serviceInformer.Lister(),
+		servicesSynced: serviceInformer.Informer().HasSynced(),
 		statefulsetsLister: statefulsetInformer.Lister(),
 		statefulsetsSynced: statefulsetInformer.Informer().HasSynced,
 		CassandraClustersLister:        CassandraClusterInformer.Lister(),
@@ -247,7 +259,7 @@ func (c *Controller) syncHandler(key string) error {
 	}
 
 	// Get the CassandraCluster resource with this namespace/name
-	CassandraCluster, err := c.CassandraClustersLister.CassandraClusters(namespace).Get(name)
+	cassandraCluster, err := c.CassandraClustersLister.CassandraClusters(namespace).Get(name)
 	if err != nil {
 		// The CassandraCluster resource may no longer exist, in which case we consider as a deletion of a CassandraCluster
 		// processing.
@@ -258,30 +270,7 @@ func (c *Controller) syncHandler(key string) error {
 
 		return err
 	} else {
-		return c.createOrUpdateCassandraCluster(name)
-	}
-
-	statefulsetName := CassandraCluster.Name
-	if statefulsetName == "" {
-		// We choose to absorb the error here as the worker would requeue the
-		// resource otherwise. Instead, the next time the resource is updated
-		// the resource will be queued again.
-		runtime.HandleError(fmt.Errorf("%s: deployment name must be specified", key))
-		return nil
-	}
-
-	// Get the deployment with the name specified in CassandraCluster.spec
-	deployment, err := c.statefulsetsLister.StatefulSets(CassandraCluster.Namespace).Get(name)
-	// If the resource doesn't exist, we'll create it
-	if errors.IsNotFound(err) {
-		deployment, err = c.kubeClientset.AppsV1().Deployments(CassandraCluster.Namespace).Create(newDeployment(CassandraCluster))
-	}
-
-	// If an error occurs during Get/Create, we'll requeue the item so we can
-	// attempt processing again later. This could have been caused by a
-	// temporary network failure, or any other transient reason.
-	if err != nil {
-		return err
+		return c.createOrUpdateCassandraCluster(cassandraCluster)
 	}
 
 	// If the Deployment is not controlled by this CassandraCluster resource, we should log
@@ -292,21 +281,6 @@ func (c *Controller) syncHandler(key string) error {
 		return fmt.Errorf(msg)
 	}
 
-	// If this number of the replicas on the CassandraCluster resource is specified, and the
-	// number does not equal the current desired replicas on the Deployment, we
-	// should update the Deployment resource.
-	if CassandraCluster.Spec.Replicas != nil && *CassandraCluster.Spec.Replicas != *deployment.Spec.Replicas {
-		glog.V(4).Infof("CassandraClusterr: %d, deplR: %d", *CassandraCluster.Spec.Replicas, *deployment.Spec.Replicas)
-		deployment, err = c.kubeclientset.AppsV1beta2().Deployments(CassandraCluster.Namespace).Update(newDeployment(CassandraCluster))
-	}
-
-	// If an error occurs during Update, we'll requeue the item so we can
-	// attempt processing again later. THis could have been caused by a
-	// temporary network failure, or any other transient reason.
-	if err != nil {
-		return err
-	}
-
 	// Finally, we update the status block of the CassandraCluster resource to reflect the
 	// current state of the world
 	err = c.updateCassandraClusterStatus(CassandraCluster, deployment)
@@ -314,7 +288,7 @@ func (c *Controller) syncHandler(key string) error {
 		return err
 	}
 
-	c.recorder.Event(CassandraCluster, corev1.EventTypeNormal, SuccessSynced, MessageResourceSynced)
+	c.recorder.Event(cassandraCluster, corev1.EventTypeNormal, SuccessSynced, MessageResourceSynced)
 	return nil
 }
 
